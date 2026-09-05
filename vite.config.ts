@@ -12,4 +12,13 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  vite: {
+    server: {
+      // Vite's dev server rejects unrecognized Host headers by default (DNS
+      // rebinding protection) — needed here because production currently
+      // runs `vite dev` behind nginx, not a built server, so the domain
+      // reaching it via reverse proxy must be explicitly trusted.
+      allowedHosts: ["portemonnaie.space", "www.portemonnaie.space"],
+    },
+  },
 });
