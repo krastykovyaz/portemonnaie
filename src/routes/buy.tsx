@@ -4,7 +4,6 @@ import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createOrderFn, getStorefrontFn } from "@/lib/api/order.functions";
 import { money } from "@/lib/format";
@@ -71,7 +70,6 @@ function BuyPage() {
   const create = useServerFn(createOrderFn);
   const navigate = useNavigate();
   const [denomination, setDenomination] = useState<number | null>(null);
-  const [email, setEmail] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(loadIdempotencyKey);
 
   const { data, isLoading } = useQuery({
@@ -85,7 +83,6 @@ function BuyPage() {
         data: {
           denomination: input.denomination,
           idempotencyKey,
-          ...(email.trim() ? { customerEmail: email.trim() } : {}),
         },
       }),
     onSuccess: (result) => {
@@ -149,17 +146,6 @@ function BuyPage() {
                 ))}
               </div>
             )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="email">Email for delivery (optional)</Label>
-            <Input
-              id="email"
-              type="email"
-              placeholder="customer@example.com"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
           </div>
 
           <Button
