@@ -175,6 +175,15 @@ export const syncTreasuryFn = createServerFn({ method: "POST" })
     return syncTreasury();
   });
 
+export const getPayoutEconomicsFn = createServerFn({ method: "GET" })
+  .middleware([requireAuth])
+  .handler(async ({ context }) => {
+    const { requireAdmin } = await import("../services/guards.server");
+    await requireAdmin(context);
+    const { getPayoutEconomicsReport } = await import("../services/payout-economics.server");
+    return getPayoutEconomicsReport();
+  });
+
 export const retryDeliveryFn = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((input: { orderId: string }) => input)

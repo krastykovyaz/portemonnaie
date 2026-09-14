@@ -2,6 +2,8 @@ import { db, newId, nowIso, tx } from "../client";
 import { writeAuditSync } from "@/lib/services/audit.server";
 import { completeRedemption } from "./redemption";
 import type { PayoutStatus } from "@/lib/payout/state-machine";
+import { fetchActualResourceUsage } from "@/lib/energy/resource-lookup.server";
+import { economicsConfig } from "@/lib/energy/economics-config";
 
 export function payoutsEnabled(): boolean {
   const row = db.query(`SELECT payouts_enabled FROM payout_settings WHERE id = 1`).get() as {
@@ -48,6 +50,8 @@ type PayoutRow = {
   max_attempts: number;
   amount: number;
   tx_hash: string | null;
+  provider: string;
+  energy_rental_id: string | null;
 };
 
 /** Recovery worker claim: picks up unfinished payouts and marks them locked by this worker. */
@@ -130,10 +134,10 @@ export function payoutMarkConfirming(
   });
 }
 
-export function payoutConfirm(
+export async function payoutConfirm(
   payoutId: string,
   confirmations = 20,
-): {
+): Promise<{
   ok: boolean;
   error?: string;
   status?: string;
@@ -141,7 +145,30 @@ export function payoutConfirm(
   tx_hash?: string | null;
   amount?: number;
   fee?: number;
-} {
+}> {
+  const preCheck = db.query(`SELECT * FROM payouts WHERE id = ?`).get(payoutId) as PayoutRow | null;
+  if (!preCheck) return { ok: false, error: "NOT_FOUND" };
+  if (preCheck.status === "CONFIRMED") {
+    return { ok: true, status: "CONFIRMED", replayed: true, tx_hash: preCheck.tx_hash, amount: preCheck.amount };
+  }
+  if (!["BROADCAST", "CONFIRMING"].includes(preCheck.status)) {
+    return { ok: false, error: "INVALID_TRANSITION", status: preCheck.status };
+  }
+
+  // Real, receipt-sourced resource usage — fetched BEFORE the synchronous
+  // sql.js transaction below (network I/O can't happen inside it). Only for
+  // real (non-mock) payouts with a broadcast tx hash; a mock/simulated
+  // payout has no real receipt, so its actual_* columns stay null rather
+  // than being guessed from the pre-broadcast estimate.
+  let actual: Awaited<ReturnType<typeof fetchActualResourceUsage>> = null;
+  if (preCheck.tx_hash && preCheck.provider !== "mock-tron-testnet") {
+    const apiUrl = process.env["TRON_API_URL"] ?? "https://nile.trongrid.io";
+    actual = await fetchActualResourceUsage(preCheck.tx_hash, apiUrl);
+  }
+  const config = economicsConfig();
+  const trxBurned = actual ? (actual.netFeeSun + actual.energyFeeSun) / 1_000_000 : null;
+  const trxCostUsd = trxBurned !== null ? trxBurned * config.trxUsdPrice : null;
+
   return tx(() => {
     const p = db.query(`SELECT * FROM payouts WHERE id = ?`).get(payoutId) as PayoutRow | null;
     if (!p) return { ok: false, error: "NOT_FOUND" };
@@ -157,10 +184,40 @@ export function payoutConfirm(
     if (!["BROADCAST", "CONFIRMING"].includes(p.status))
       return { ok: false, error: "INVALID_TRANSITION", status: p.status };
 
+    // Fold in what we paid a rental provider (if this payout used one) on
+    // top of the actual on-chain burn -- for BURN/STAKED payouts (no
+    // energy_rental_id) this leaves provider_cost/total_network_cost exactly
+    // as they were before rental support existed.
+    let rentalPriceUsd: number | null = null;
+    if (p.energy_rental_id) {
+      const rental = db
+        .query(`SELECT price_usd FROM energy_rentals WHERE id = ?`)
+        .get(p.energy_rental_id) as { price_usd: number | null } | null;
+      rentalPriceUsd = rental?.price_usd ?? null;
+    }
+    const providerCost = rentalPriceUsd ?? trxCostUsd;
+    const totalNetworkCost =
+      trxCostUsd === null && rentalPriceUsd === null ? null : (trxCostUsd ?? 0) + (rentalPriceUsd ?? 0);
+
     const now = nowIso();
     db.query(
-      `UPDATE payouts SET status = 'CONFIRMED', confirmations = ?, confirmed_at = ?, failure_reason = NULL, locked_by = NULL, locked_at = NULL, updated_at = ? WHERE id = ?`,
-    ).run(confirmations, now, now, p.id);
+      `UPDATE payouts SET status = 'CONFIRMED', confirmations = ?, confirmed_at = ?, failure_reason = NULL,
+        locked_by = NULL, locked_at = NULL, updated_at = ?,
+        actual_energy = ?, actual_bandwidth = ?, trx_burned = ?, trx_cost_usd = ?,
+        provider_cost = ?, total_network_cost = ?
+       WHERE id = ?`,
+    ).run(
+      confirmations,
+      now,
+      now,
+      actual?.energyUsed ?? null,
+      actual?.bandwidthUsed ?? null,
+      trxBurned,
+      trxCostUsd,
+      providerCost,
+      totalNetworkCost,
+      p.id,
+    );
 
     const done = completeRedemption(p.redemption_id, p.tx_hash ?? "", confirmations, p.fee_rate);
     const fee = Math.round(p.amount * p.fee_rate * 100) / 100;
@@ -179,6 +236,11 @@ export function payoutConfirm(
       metadata: {
         tx_hash: p.tx_hash,
         confirmations,
+        actual_energy: actual?.energyUsed ?? null,
+        actual_bandwidth: actual?.bandwidthUsed ?? null,
+        trx_burned: trxBurned,
+        rental_price_usd: rentalPriceUsd,
+        total_network_cost_usd: totalNetworkCost,
         ledger: done as unknown as Record<string, never>,
       },
     });
@@ -347,14 +409,21 @@ export function createPayoutForRedemption(input: {
   createdAt?: string;
   broadcastAt?: string | null;
   confirmedAt?: string | null;
+  /** Cost estimate computed by the EnergyManager before broadcast — see src/lib/energy/. */
+  recipientKind?: "fresh" | "existing" | null;
+  estimatedEnergy?: number | null;
+  estimatedBandwidth?: number | null;
+  resourceSource?: string | null;
+  /** Set when planPayoutResources() actually purchased a rental for this payout — see src/lib/energy/rental/. */
+  energyRentalId?: string | null;
 }): string {
   const id = newId();
   const now = nowIso();
   db.query(
     `INSERT INTO payouts (id, redemption_id, voucher_id, transaction_id, user_id, idempotency_key, provider, network, token,
       amount, destination_address, tx_hash, status, confirmations, attempt_count, next_attempt_at, created_at,
-      broadcast_at, confirmed_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+      broadcast_at, confirmed_at, updated_at, recipient_kind, estimated_energy, estimated_bandwidth, resource_source, energy_rental_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.redemptionId,
@@ -375,6 +444,11 @@ export function createPayoutForRedemption(input: {
     input.broadcastAt ?? null,
     input.confirmedAt ?? null,
     now,
+    input.recipientKind ?? null,
+    input.estimatedEnergy ?? null,
+    input.estimatedBandwidth ?? null,
+    input.resourceSource ?? null,
+    input.energyRentalId ?? null,
   );
   return id;
 }

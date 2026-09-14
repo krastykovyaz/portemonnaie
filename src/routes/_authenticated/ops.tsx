@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import {
   getOpsQueuesFn,
   getOpsRuntimeFn,
+  getPayoutEconomicsFn,
   resolveReviewFn,
   retryDeliveryFn,
   runOrderReconciliationFn,
@@ -37,6 +38,7 @@ function OpsPage() {
   const { t } = useI18n();
   const runtimeFn = useServerFn(getOpsRuntimeFn);
   const queuesFn = useServerFn(getOpsQueuesFn);
+  const economicsFn = useServerFn(getPayoutEconomicsFn);
   const resolveFn = useServerFn(resolveReviewFn);
   const reconFn = useServerFn(runOrderReconciliationFn);
   const treasuryFn = useServerFn(syncTreasuryFn);
@@ -47,6 +49,10 @@ function OpsPage() {
   const queues = useQuery({
     queryKey: ["ops-queues"],
     queryFn: () => queuesFn({ data: { reviewStatus: "OPEN" } }),
+  });
+  const economics = useQuery({
+    queryKey: ["ops-payout-economics"],
+    queryFn: () => economicsFn(),
   });
 
   function refresh() {
@@ -127,6 +133,8 @@ function OpsPage() {
           </p>
         ) : null}
       </div>
+
+      <PayoutEconomicsSection data={economics.data} isLoading={economics.isLoading} />
 
       <section className="space-y-3">
         <div className="flex items-center justify-between">
@@ -322,6 +330,201 @@ function OpsPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+function usd(value: number | null): string {
+  if (value === null) return "—";
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+}
+
+function pct(value: number | null): string {
+  if (value === null) return "—";
+  return `${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+}
+
+type PayoutEconomics = Awaited<ReturnType<typeof getPayoutEconomicsFn>>;
+
+function PayoutEconomicsSection({
+  data,
+  isLoading,
+}: {
+  data: PayoutEconomics | undefined;
+  isLoading: boolean;
+}) {
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="text-lg font-medium">Payout economics</h2>
+        <p className="text-sm text-muted-foreground">
+          Real, receipt-verified network cost from confirmed on-chain payouts only — never
+          estimated.
+        </p>
+      </div>
+
+      {isLoading || !data ? (
+        <div className="panel p-5 text-sm text-muted-foreground">Loading…</div>
+      ) : (
+        <>
+          <div className="panel grid gap-4 p-5 sm:grid-cols-3 lg:grid-cols-6">
+            <Field
+              label="Treasury TRX"
+              value={
+                data.treasury.simulated
+                  ? "Simulated"
+                  : (data.treasury.trxBalance?.toFixed(2) ?? "—")
+              }
+            />
+            <Field
+              label="Treasury USDT"
+              value={
+                data.treasury.simulated
+                  ? "Simulated"
+                  : (data.treasury.usdtBalance?.toFixed(2) ?? "—")
+              }
+            />
+            <Field
+              label="Energy available"
+              value={
+                data.treasury.simulated ? "—" : String(data.treasury.energyAvailable ?? "—")
+              }
+            />
+            <Field
+              label="Bandwidth available"
+              value={
+                data.treasury.simulated ? "—" : String(data.treasury.bandwidthAvailable ?? "—")
+              }
+            />
+            <Field label="Confirmed real payouts" value={String(data.metrics.overall.count)} />
+            <Field
+              label="Success / fail / review"
+              value={`${data.metrics.successCount} / ${data.metrics.failureCount} / ${data.metrics.manualReviewCount}`}
+            />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="panel p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Avg network cost / payout
+              </p>
+              <p className="mt-1 text-xl font-semibold">{usd(data.metrics.overall.avgNetworkCostUsd)}</p>
+            </div>
+            <div className="panel p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Fresh-recipient avg cost
+              </p>
+              <p className="mt-1 text-xl font-semibold">{usd(data.metrics.fresh.avgNetworkCostUsd)}</p>
+              <p className="mono-tag text-muted-foreground">n={data.metrics.fresh.count}</p>
+            </div>
+            <div className="panel p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Existing-recipient avg cost
+              </p>
+              <p className="mt-1 text-xl font-semibold">
+                {usd(data.metrics.existing.avgNetworkCostUsd)}
+              </p>
+              <p className="mono-tag text-muted-foreground">n={data.metrics.existing.count}</p>
+            </div>
+            <div className="panel p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">
+                Total network cost (all time)
+              </p>
+              <p className="mt-1 text-xl font-semibold">{usd(data.metrics.overall.totalNetworkCostUsd)}</p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="panel p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Last 24h</p>
+              <p className="mt-1 text-lg font-semibold">{usd(data.metrics.last24h.avgNetworkCostUsd)}</p>
+              <p className="mono-tag text-muted-foreground">n={data.metrics.last24h.count}</p>
+            </div>
+            <div className="panel p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Last 7d</p>
+              <p className="mt-1 text-lg font-semibold">{usd(data.metrics.last7d.avgNetworkCostUsd)}</p>
+              <p className="mono-tag text-muted-foreground">n={data.metrics.last7d.count}</p>
+            </div>
+            <div className="panel p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Last 30d</p>
+              <p className="mt-1 text-lg font-semibold">{usd(data.metrics.last30d.avgNetworkCostUsd)}</p>
+              <p className="mono-tag text-muted-foreground">n={data.metrics.last30d.count}</p>
+            </div>
+          </div>
+
+          <div className="panel overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-3">Voucher</th>
+                  <th className="px-4 py-3">Fee (1%)</th>
+                  <th className="px-4 py-3">Avg network cost</th>
+                  <th className="px-4 py-3">Margin after cost</th>
+                  <th className="px-4 py-3">Cost as % of voucher</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.byDenomination.map((row) => (
+                  <tr key={row.denomination} className="border-t border-border/60">
+                    <td className="px-4 py-3">${row.denomination}</td>
+                    <td className="px-4 py-3">{usd(row.feeUsd)}</td>
+                    <td className="px-4 py-3">{usd(row.avgNetworkCostUsd)}</td>
+                    <td
+                      className={`px-4 py-3 ${row.netMarginUsd !== null && row.netMarginUsd < 0 ? "text-destructive" : ""}`}
+                    >
+                      {usd(row.netMarginUsd)}
+                    </td>
+                    <td className="px-4 py-3">{pct(row.costAsPctOfVoucher)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel grid gap-4 p-5 sm:grid-cols-3">
+            <Field label="Projected cost / 100 payouts" value={usd(data.projected.per100)} />
+            <Field label="Projected cost / 1,000 payouts" value={usd(data.projected.per1000)} />
+            <Field label="Projected cost / 10,000 payouts" value={usd(data.projected.per10000)} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Resource provider: {data.config.provider} · cost guard{" "}
+            {data.config.costGuardEnabled ? "enabled" : "disabled"} · max network cost{" "}
+            {usd(data.config.maxNetworkCostUsd)} · min margin {usd(data.config.minPayoutMarginUsd)}
+          </p>
+
+          <div className="panel grid gap-4 p-5 sm:grid-cols-3 lg:grid-cols-6">
+            <Field
+              label="Energy available"
+              value={data.treasury.simulated ? "—" : String(data.treasury.energyAvailable ?? "—")}
+            />
+            <Field label="Rental provider" value={data.rental.provider} />
+            <Field
+              label="Last rental"
+              value={data.rental.lastRental ? shortDate(data.rental.lastRental.createdAt) : "None yet"}
+            />
+            <Field
+              label="Last rental price"
+              value={data.rental.lastRental?.priceTrx != null ? `${data.rental.lastRental.priceTrx} TRX` : "—"}
+            />
+            <Field
+              label="Rented energy"
+              value={
+                data.rental.lastRental?.delegatedEnergy != null
+                  ? String(data.rental.lastRental.delegatedEnergy)
+                  : "—"
+              }
+            />
+            <Field
+              label="Rental expiration"
+              value={data.rental.lastRental?.expiresAt ? shortDate(data.rental.lastRental.expiresAt) : "—"}
+            />
+            <Field
+              label="Rental active / failed / expired"
+              value={`${data.rental.stats.active} / ${data.rental.stats.failed} / ${data.rental.stats.expired}`}
+            />
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
