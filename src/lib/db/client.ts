@@ -32,6 +32,34 @@ const raw: SqlJsDatabase = existsSync(DB_PATH)
 raw.exec("PRAGMA foreign_keys = ON;");
 raw.exec(SCHEMA_SQL);
 
+// CREATE TABLE IF NOT EXISTS leaves existing tables untouched, so columns
+// added to an already-created table (e.g. payouts' cost-accounting columns)
+// need an explicit, idempotent migration here rather than in schema.ts.
+function persistNow(): void {
+  writeFileSync(DB_PATH, Buffer.from(raw.export()));
+}
+
+function ensureColumn(table: string, column: string, ddl: string): void {
+  const info = raw.exec(`PRAGMA table_info(${table})`);
+  const existing = new Set((info[0]?.values ?? []).map((row) => row[1]));
+  if (!existing.has(column)) {
+    raw.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+
+ensureColumn("payouts", "recipient_kind", "recipient_kind TEXT");
+ensureColumn("payouts", "estimated_energy", "estimated_energy INTEGER");
+ensureColumn("payouts", "actual_energy", "actual_energy INTEGER");
+ensureColumn("payouts", "estimated_bandwidth", "estimated_bandwidth INTEGER");
+ensureColumn("payouts", "actual_bandwidth", "actual_bandwidth INTEGER");
+ensureColumn("payouts", "trx_burned", "trx_burned REAL");
+ensureColumn("payouts", "trx_cost_usd", "trx_cost_usd REAL");
+ensureColumn("payouts", "resource_source", "resource_source TEXT");
+ensureColumn("payouts", "provider_cost", "provider_cost REAL");
+ensureColumn("payouts", "total_network_cost", "total_network_cost REAL");
+ensureColumn("payouts", "energy_rental_id", "energy_rental_id TEXT");
+persistNow();
+
 // Exporting the database (persist) mid-transaction ends the transaction
 // early under the hood, so writes inside tx() must not trigger it — only the
 // tx() wrapper persists, once, after COMMIT.

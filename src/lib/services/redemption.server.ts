@@ -4,7 +4,7 @@ import {
   startRedemption,
   failRedemption,
 } from "@/lib/db/procedures/redemption";
-import { createPayoutForRedemption } from "@/lib/db/procedures/payouts";
+import { createPayoutForRedemption, payoutManualReview } from "@/lib/db/procedures/payouts";
 import { FEE_RATE, type RedemptionResult } from "../domain/types";
 import { hashVoucherCode } from "../voucher-codes";
 import { blockchainProvider } from "../providers/mock-blockchain";
@@ -13,6 +13,9 @@ import { screeningProvider } from "../providers/compliance";
 import { drivePayout } from "../payout/orchestrator";
 import { supabasePayoutStore } from "./payout-store.server";
 import { payoutLog } from "./payout.server";
+import { resolveEnergyManager } from "../energy/registry.server";
+import { economicsConfig } from "../energy/economics-config";
+import { planPayoutResources } from "../energy/rental/plan-resources.server";
 
 export type PreviewResult =
   | {
@@ -81,6 +84,74 @@ export async function redeemVoucher(input: {
   // MAINNET always gets the mock here — real payouts are entirely out of scope.
   const runtime = resolveRuntime();
 
+  // Cost estimation + guard: real payouts only. Simulated payouts have no
+  // real chain to query and no real cost, so this is skipped entirely for
+  // them — zero behavior change for DEMO/un-opted-in TESTNET.
+  let recipientKind: "fresh" | "existing" | null = null;
+  let estimatedEnergy: number | null = null;
+  let estimatedBandwidth: number | null = null;
+  let resourceSource: string | null = null;
+  let energyRentalId: string | null = null;
+  if (!runtime.payoutProvider.simulated) {
+    const energyManager = resolveEnergyManager();
+    recipientKind = await energyManager.classifyRecipient(destination);
+    const resources = await energyManager.getAccountResources(
+      process.env["TREASURY_ADDRESS"] ?? "",
+    );
+    const estimate = energyManager.estimateCost(recipientKind, resources);
+
+    const feeUsd = Math.round(Number(start.amount) * FEE_RATE * 100) / 100;
+    // When ENERGY_PROVIDER=RENTED and there's a real shortfall, this quotes a
+    // real rental, guard-checks the REAL price, and purchases/verifies it —
+    // otherwise (the default) it's byte-for-byte the pre-existing BURN/STAKED
+    // guard decision. See plan-resources.server.ts.
+    const plan = await planPayoutResources(
+      economicsConfig(),
+      estimate,
+      process.env["TREASURY_ADDRESS"] ?? "",
+      feeUsd,
+      start.redemption_id,
+    );
+
+    estimatedEnergy = estimate.estimatedEnergy;
+    estimatedBandwidth = estimate.estimatedBandwidth;
+    resourceSource = plan.ok ? plan.estimate.resourceSource : estimate.resourceSource;
+    energyRentalId = plan.ok ? plan.rentalId : null;
+
+    if (!plan.ok) {
+      const payoutId = createPayoutForRedemption({
+        redemptionId: start.redemption_id,
+        voucherId: start.voucher_id,
+        transactionId: start.transaction_id,
+        userId: input.userId ?? null,
+        amount: Number(start.amount),
+        network: start.network,
+        token: start.asset,
+        destination,
+        idempotencyKey: start.redemption_id,
+        provider: runtime.payoutProvider.id,
+        recipientKind,
+        estimatedEnergy,
+        estimatedBandwidth,
+        resourceSource,
+      });
+      // Terminal until an admin acts (same MANUAL_REVIEW semantics as any
+      // other payout escalation) — the voucher deliberately stays REDEEMING,
+      // not released, exactly like the orchestrator-driven MANUAL_REVIEW
+      // path below, so it can't be redeemed twice while under review.
+      payoutManualReview({
+        payoutId,
+        reason: plan.reason,
+        actorId: input.userId ?? null,
+        actorLabel: "cost-guard",
+      });
+      return {
+        ok: false,
+        error: "This payout requires manual review before it can be sent — please contact support.",
+      };
+    }
+  }
+
   const payoutId = createPayoutForRedemption({
     redemptionId: start.redemption_id,
     voucherId: start.voucher_id,
@@ -96,6 +167,11 @@ export async function redeemVoucher(input: {
     // creating a second on-chain transfer for one redemption.
     idempotencyKey: start.redemption_id,
     provider: runtime.payoutProvider.id,
+    recipientKind,
+    estimatedEnergy,
+    estimatedBandwidth,
+    resourceSource,
+    energyRentalId,
   });
 
   const record = await supabasePayoutStore.load(payoutId);

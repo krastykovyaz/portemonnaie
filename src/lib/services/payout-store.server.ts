@@ -74,7 +74,7 @@ export const supabasePayoutStore: PayoutStore = {
   },
 
   async confirm(payoutId, confirmations) {
-    const result = payoutConfirm(payoutId, confirmations);
+    const result = await payoutConfirm(payoutId, confirmations);
     if (!result.ok) return { ok: false, error: result.error ?? "CONFIRM_FAILED" };
     return { ok: true };
   },

@@ -323,6 +323,20 @@ CREATE TABLE IF NOT EXISTS payouts (
   confirming_at TEXT,
   confirmed_at TEXT,
   failed_at TEXT,
+  -- Cost accounting. estimated_* are computed by the EnergyManager before
+  -- broadcast; actual_* are filled in from the real TronGrid receipt at
+  -- confirmation time and are NULL until then (never backfilled from the
+  -- estimate). See src/lib/energy/.
+  recipient_kind TEXT,
+  estimated_energy INTEGER,
+  actual_energy INTEGER,
+  estimated_bandwidth INTEGER,
+  actual_bandwidth INTEGER,
+  trx_burned REAL,
+  trx_cost_usd REAL,
+  resource_source TEXT,
+  provider_cost REAL,
+  total_network_cost REAL,
   updated_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_payouts_tx_hash ON payouts(tx_hash) WHERE tx_hash IS NOT NULL;
@@ -344,6 +358,36 @@ CREATE TABLE IF NOT EXISTS payout_signer_broadcasts (
   amount REAL NOT NULL,
   created_at TEXT NOT NULL
 );
+
+-- Real-money-adjacent even though every reachable runtime today uses the
+-- mock rental provider (see src/lib/energy/rental/registry.server.ts): this
+-- table is the durable idempotency guard so a payout retry can never
+-- purchase a second Energy rental for the same redemption. Never holds API
+-- credentials -- only the public order id, price and delegation metadata.
+CREATE TABLE IF NOT EXISTS energy_rentals (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  provider_order_id TEXT,
+  treasury_address TEXT NOT NULL,
+  requested_energy INTEGER NOT NULL,
+  delegated_energy INTEGER,
+  price_trx REAL,
+  price_usd REAL,
+  currency TEXT NOT NULL DEFAULT 'TRX',
+  duration TEXT,
+  started_at TEXT,
+  expires_at TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING'
+    CHECK (status IN ('PENDING','ACTIVE','FAILED','EXPIRED','CANCELLED')),
+  tx_hash TEXT,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  payout_id TEXT REFERENCES payouts(id) ON DELETE SET NULL,
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_energy_rentals_status ON energy_rentals(status);
+CREATE INDEX IF NOT EXISTS idx_energy_rentals_payout ON energy_rentals(payout_id);
 
 CREATE TABLE IF NOT EXISTS payout_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
