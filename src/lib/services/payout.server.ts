@@ -2,10 +2,12 @@ import { db } from "@/lib/db/client";
 import {
   setPayoutsEnabled as setPayoutsEnabledProc,
   payoutClaimBatch,
+  payoutFail,
   payoutRetry,
   payoutManualReview,
   payoutReleaseVoucher,
 } from "@/lib/db/procedures/payouts";
+import { assessPayoutResources } from "../energy/pre-broadcast-guard.server";
 import { resolveRuntime } from "../providers/registry.server";
 import { drivePayout, type PayoutOutcome, type PayoutRecord } from "../payout/orchestrator";
 import { PAYOUT_STATUS_LABELS, type PayoutStatus } from "../payout/state-machine";
@@ -23,6 +25,30 @@ export async function processPayout(payout: PayoutRecord): Promise<PayoutOutcome
   // mock; only CHAIN_MODE=TESTNET + PAYOUT_SIGNER=TRON_TESTNET (validated)
   // gets the real signer. See registry.server.ts's resolvePayoutProvider.
   const runtime = resolveRuntime();
+
+  // The cost guard must run on EVERY path that can broadcast, not only the
+  // customer's own redeem call — the recovery sweep and an admin retry both
+  // reach here with a PENDING/FAILED record that has never been sent.
+  const aboutToBroadcast = !payout.txHash && (payout.status === "PENDING" || payout.status === "FAILED");
+  if (aboutToBroadcast && !runtime.payoutProvider.simulated) {
+    const assessment = await assessPayoutResources({
+      destination: payout.destination,
+      amount: payout.amount,
+      idempotencyKey: payout.idempotencyKey,
+    });
+    if (!assessment.ok) {
+      payoutFail(payout.id, assessment.reason.slice(0, 500), true);
+      payoutLog("payout.cost_guard_rejected", { payoutId: payout.id, reason: assessment.reason });
+      return {
+        payoutId: payout.id,
+        status: "MANUAL_REVIEW",
+        txHash: null,
+        confirmations: payout.confirmations,
+        failureReason: assessment.reason,
+      };
+    }
+  }
+
   return drivePayout(payout, {
     provider: runtime.payoutProvider,
     store: supabasePayoutStore,

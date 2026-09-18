@@ -50,3 +50,34 @@ bun run bot
 ```
 
 Requires `TELEGRAM_BOT_TOKEN` in `.env`.
+
+**One writer per database.** `sql.js` keeps the whole database in memory and rewrites the file on every write, so the web app and the bot must not share a `DATABASE_PATH` — the second process refuses to start (`DATABASE_LOCKED`). Give the bot its own file, or run only one of them.
+
+## Production
+
+Build a self-contained Node server and run that — not `vite dev`:
+
+```sh
+bun run build          # -> .output/ (Nitro node-server preset)
+bun run start          # node .output/server/index.mjs, listens on $PORT (default 3000)
+```
+
+Run it from the repository directory: the server resolves `sql.js` (and its `.wasm`) from the project's `node_modules` at runtime.
+
+Behind nginx set, in addition to `SESSION_SECRET` and an absolute `DATABASE_PATH`:
+
+- `TRUST_PROXY=true` — per-IP rate limits read `X-Forwarded-For`. Without it every visitor shares nginx's bucket.
+- `CRON_SECRET` — then `POST /api/public/cron/sweep` (bearer token) every few minutes; it recovers payments/payouts and takes an hourly database snapshot into `data/backups/` (last 48 kept). `bun run db:backup` takes one on demand.
+
+A minimal systemd unit:
+
+```ini
+[Service]
+WorkingDirectory=/root/kovyaz/crypto_vouchers
+EnvironmentFile=/root/kovyaz/crypto_vouchers/.env
+Environment=PORT=8080 NODE_ENV=production
+ExecStart=/usr/bin/node .output/server/index.mjs
+Restart=always
+```
+
+Database writes are atomic (temp file + rename), so a crash mid-write leaves the previous complete file in place — but they are not a substitute for the backups above.

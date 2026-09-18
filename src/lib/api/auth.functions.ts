@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireAuth } from "@/lib/auth/require-auth.server";
+import { rateLimited } from "@/lib/security/rate-limit.server";
 
 const credentialsSchema = z.object({
   email: z.string().email().max(200),
@@ -8,6 +9,7 @@ const credentialsSchema = z.object({
 });
 
 export const signInFn = createServerFn({ method: "POST" })
+  .middleware([rateLimited("sign-in", { limit: 10, windowMs: 60_000 })])
   .inputValidator((input: unknown) => credentialsSchema.parse(input))
   .handler(async ({ data }) => {
     const { getUserByEmail } = await import("@/lib/db/users");
@@ -22,6 +24,7 @@ export const signInFn = createServerFn({ method: "POST" })
   });
 
 export const signUpFn = createServerFn({ method: "POST" })
+  .middleware([rateLimited("sign-up", { limit: 5, windowMs: 10 * 60_000 })])
   .inputValidator((input: unknown) => credentialsSchema.parse(input))
   .handler(async ({ data }) => {
     const { getUserByEmail, createUser } = await import("@/lib/db/users");

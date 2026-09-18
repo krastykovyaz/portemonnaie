@@ -13,17 +13,76 @@
  * a single-writer demo; genuinely concurrent access would need a real
  * server-mode database.
  */
-import initSqlJs, { type Database as SqlJsDatabase } from "sql.js";
+import type { Database as SqlJsDatabase, SqlJsStatic } from "sql.js";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SCHEMA_SQL } from "./schema";
 
-const DB_PATH = process.env["DATABASE_PATH"] ?? join(process.cwd(), "data", "app.db");
+export const DB_PATH = process.env["DATABASE_PATH"] ?? join(process.cwd(), "data", "app.db");
 mkdirSync(dirname(DB_PATH), { recursive: true });
+
+// Single-writer guard. Every process holds its own in-memory copy and
+// rewrites the whole file on each write, so a second writer (the web app and
+// the bot on one DATABASE_PATH) silently overwrites the other's data. Refuse
+// to start instead. Same-pid re-imports (Vite HMR) are fine; a stale lock
+// from a crashed process is ignored. Vitest workers legitimately share a
+// throwaway file, and an operator can opt into the hazard explicitly.
+const LOCK_PATH = `${DB_PATH}.lock`;
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function acquireWriterLock(): void {
+  if (process.env["VITEST"] || process.env["DATABASE_SHARED_WRITERS"] === "true") return;
+  if (existsSync(LOCK_PATH)) {
+    const holder = Number(readFileSync(LOCK_PATH, "utf8").trim());
+    if (Number.isFinite(holder) && holder !== process.pid && processAlive(holder)) {
+      throw new Error(
+        `DATABASE_LOCKED: ${DB_PATH} is already open for writing by pid ${holder}. ` +
+          "sql.js holds the whole database in memory and rewrites the file on every write, so two " +
+          "writer processes (web app + bot) silently overwrite each other. Stop the other process or " +
+          "give it its own DATABASE_PATH. DATABASE_SHARED_WRITERS=true overrides this if you accept data loss.",
+      );
+    }
+  }
+  writeFileSync(LOCK_PATH, String(process.pid));
+  process.once("exit", () => {
+    try {
+      if (readFileSync(LOCK_PATH, "utf8").trim() === String(process.pid)) unlinkSync(LOCK_PATH);
+    } catch {
+      /* best effort */
+    }
+  });
+}
+
+acquireWriterLock();
+
+// Write to a sibling temp file and rename over the target: rename is atomic
+// on POSIX, so a crash mid-write leaves the previous complete database in
+// place instead of a truncated one.
+function writeAtomic(): void {
+  const tmp = `${DB_PATH}.tmp-${process.pid}`;
+  writeFileSync(tmp, Buffer.from(raw.export()));
+  renameSync(tmp, DB_PATH);
+}
 
 const require = createRequire(import.meta.url);
 const wasmPath = require.resolve("sql.js/dist/sql-wasm.wasm");
+// Loaded via require, not a static import: sql.js ships emscripten UMD code
+// that calls require() internally. Bundled into an ESM chunk (the production
+// Nitro build) that sits next to top-level await and Node refuses to load it.
+// Keeping it opaque to the bundler means Node's CJS loader handles it in
+// production exactly as it does under `vite dev`.
+type InitSqlJs = (config?: { locateFile?: (file: string) => string }) => Promise<SqlJsStatic>;
+const sqlJsModule = require("sql.js") as InitSqlJs & { default?: InitSqlJs };
+const initSqlJs: InitSqlJs = sqlJsModule.default ?? sqlJsModule;
 const SQL = await initSqlJs({ locateFile: () => wasmPath });
 
 const raw: SqlJsDatabase = existsSync(DB_PATH)
@@ -36,7 +95,7 @@ raw.exec(SCHEMA_SQL);
 // added to an already-created table (e.g. payouts' cost-accounting columns)
 // need an explicit, idempotent migration here rather than in schema.ts.
 function persistNow(): void {
-  writeFileSync(DB_PATH, Buffer.from(raw.export()));
+  writeAtomic();
 }
 
 function ensureColumn(table: string, column: string, ddl: string): void {
@@ -67,7 +126,7 @@ let inTransaction = false;
 
 function persist(): void {
   if (inTransaction) return;
-  writeFileSync(DB_PATH, Buffer.from(raw.export()));
+  writeAtomic();
 }
 
 type Bind = ReadonlyArray<string | number | null | Uint8Array>;
@@ -156,11 +215,7 @@ export function fromJson<T = Record<string, unknown>>(json: string | null | unde
   }
 }
 
-// Auto-seed on first boot from any entry point (web app or bot) so a fresh
-// clone isn't blank. Dynamic import avoids a static circular dependency with
-// ./seed, which itself imports `db` from this module.
-const voucherCount = (db.query(`SELECT COUNT(*) AS n FROM vouchers`).get() as { n: number }).n;
-if (voucherCount === 0) {
-  const { seedDemoData } = await import("./seed");
-  await seedDemoData();
-}
+// First-boot seeding lives in ./bootstrap (ensureSeeded), NOT here: seed.ts
+// imports this module, so awaiting it from this module's own top level is an
+// ESM cycle — under the real-ESM production build each side waits on the
+// other forever (Vite's dev loader happened to tolerate it).

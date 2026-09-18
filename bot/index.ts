@@ -14,6 +14,9 @@ import { resolveIdentity } from "./auth";
 import { getSession } from "./session";
 import { routeMessage, routeCallback } from "./router";
 import type { Ctx } from "./context";
+import { ensureSeeded } from "@/lib/db/bootstrap";
+
+await ensureSeeded();
 
 async function handleUpdate(tg: TelegramClient, update: TelegramUpdate): Promise<void> {
   if (update.message?.text && update.message.from) {

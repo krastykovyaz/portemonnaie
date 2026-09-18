@@ -23,6 +23,16 @@ export const Route = createFileRoute("/api/public/cron/sweep")({
         const payments = await runPaymentSweep({ limit: 50 });
         const payouts = await runRecoverySweep({ worker: "cron", limit: 25 });
 
+        // Piggyback an hourly snapshot on the cron cadence: at most one copy
+        // per hour, pruned to the last 48 (see src/lib/db/backup.server.ts).
+        const { maybeBackupDatabase } = await import("@/lib/db/backup.server");
+        let backup: string | null = null;
+        try {
+          backup = maybeBackupDatabase();
+        } catch (error) {
+          console.error(error);
+        }
+
         return Response.json(
           {
             ok: true,
@@ -39,6 +49,7 @@ export const Route = createFileRoute("/api/public/cron/sweep")({
               stillOpen: payouts.stillOpen,
               manualReview: payouts.manualReview,
             },
+            backup,
           },
           { headers: { "Cache-Control": "no-store" } },
         );
