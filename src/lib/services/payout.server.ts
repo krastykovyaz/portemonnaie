@@ -290,7 +290,26 @@ export async function releaseStuckVoucher(input: {
   actorId: string | null;
   actorLabel: string;
 }) {
-  const result = payoutReleaseVoucher(input);
+  // If a transfer was ever broadcast, ask the chain before letting the
+  // voucher be redeemed again — an unknown/pending/confirmed hash means the
+  // customer may already have (or still get) the funds.
+  const record = await supabasePayoutStore.load(input.payoutId);
+  if (!record) return { ok: false as const, message: "NOT_FOUND" };
+  let chainFailureVerified = false;
+  if (record.txHash) {
+    const chain = await resolveRuntime().payoutProvider.getTransactionStatus(record.txHash);
+    if (!chain || chain.status !== "FAILED") {
+      payoutLog("release.refused", {
+        payoutId: input.payoutId,
+        txHash: record.txHash,
+        chainStatus: chain?.status ?? "UNKNOWN",
+      });
+      return { ok: false as const, message: "TX_NOT_PROVEN_FAILED" };
+    }
+    chainFailureVerified = true;
+  }
+
+  const result = payoutReleaseVoucher({ ...input, chainFailureVerified });
   if (!result.ok) return { ok: false as const, message: result.error ?? "FAILED" };
   await writeAudit({
     actorId: input.actorId,

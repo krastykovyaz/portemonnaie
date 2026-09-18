@@ -51,7 +51,10 @@ function num(raw: string | undefined, fallback: number): number {
  * mock, same as DEMO. The MAINNET_ACKNOWLEDGED / CUSTODY_KEY_REF guard above
  * for the (currently unused) WalletSigner is untouched.
  */
-function resolvePayoutProvider(mode: ChainMode): { provider: BlockchainProvider; blockers: string[] } {
+function resolvePayoutProvider(
+  mode: ChainMode,
+  paymentBlockers: string[],
+): { provider: BlockchainProvider; blockers: string[] } {
   if (mode !== "TESTNET") {
     return { provider: mockBlockchainProvider, blockers: [] };
   }
@@ -60,6 +63,15 @@ function resolvePayoutProvider(mode: ChainMode): { provider: BlockchainProvider;
   }
 
   const blockers: string[] = [];
+  // Never pair real outgoing transfers with simulated incoming payment
+  // detection: if detection is misconfigured the gateway degrades to the
+  // mock, and a "paid" order that nobody paid for must not reach a real
+  // signer.
+  if (paymentBlockers.length > 0) {
+    blockers.push(
+      `payment detection is not configured (${paymentBlockers.join("; ")}) — real payouts refuse to run alongside a simulated payment gateway`,
+    );
+  }
   const tronNetwork = (process.env["TRON_NETWORK"] ?? "").trim().toUpperCase();
   if (tronNetwork !== "NILE") {
     blockers.push("TRON_NETWORK must be 'NILE' to enable the real testnet payout signer");
@@ -157,7 +169,10 @@ export function resolveRuntime(): RuntimeConfig {
           decimals: num(process.env["USDT_DECIMALS"], 6),
         });
 
-  const { provider: payoutProvider, blockers: payoutBlockers } = resolvePayoutProvider(mode);
+  const { provider: payoutProvider, blockers: payoutBlockers } = resolvePayoutProvider(
+    mode,
+    blockers,
+  );
 
   return {
     descriptor,

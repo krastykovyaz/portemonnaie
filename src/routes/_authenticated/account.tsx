@@ -94,6 +94,14 @@ function AccountPage() {
         ) : null}
       </div>
 
+      {profile.data && !profile.data.demoToolsEnabled ? (
+        <p className="text-sm text-muted-foreground">
+          Demo tools (role claiming, dataset reset) are disabled outside DEMO mode — roles are
+          provisioned by an operator.
+        </p>
+      ) : null}
+
+      {profile.data?.demoToolsEnabled ? (
       <div className="panel space-y-4 p-4">
         <div>
           <h2 className="text-sm font-semibold">Claim a demo role</h2>
@@ -137,8 +145,9 @@ function AccountPage() {
           </Button>
         </div>
       </div>
+      ) : null}
 
-      {profile.data?.roles.includes("admin") ? (
+      {profile.data?.demoToolsEnabled && profile.data.roles.includes("admin") ? (
         <div className="panel space-y-3 p-4">
           <div>
             <h2 className="text-sm font-semibold">Reset demo dataset</h2>

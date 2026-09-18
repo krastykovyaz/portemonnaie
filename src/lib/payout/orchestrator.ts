@@ -111,8 +111,14 @@ export async function drivePayout(
       log("payout.tx_unknown_to_provider", { ...base, txHash });
       txHash = null; // re-broadcast below, using the same idempotency key
     } else if (onChain.status === "FAILED") {
-      const escalate = attempt + 1 >= payout.maxAttempts;
-      const result = await store.fail(payout.id, "PROVIDER_REPORTED_FAILED", escalate);
+      // A reverted broadcast can never be retried automatically: the provider
+      // de-duplicates on the idempotency key and would hand back this same
+      // reverted hash forever, and no attempt counter advances on this path —
+      // leaving it retryable made the recovery sweep re-claim it every pass
+      // without ever escalating. Go straight to MANUAL_REVIEW; an operator
+      // releases the voucher (after the chain failure is verified) so the
+      // customer can redeem again under a fresh key.
+      const result = await store.fail(payout.id, "PROVIDER_REPORTED_FAILED", true);
       log("payout.failed", { ...base, txHash, status: result.status });
       return {
         payoutId: payout.id,

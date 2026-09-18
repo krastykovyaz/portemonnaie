@@ -58,12 +58,14 @@ export const getSessionProfileFn = createServerFn({ method: "GET" })
     const email = context.claims["email"];
     const { getAgentByUser } = await import("../services/agent.server");
     const agent = roles.includes("agent") ? await getAgentByUser(context.userId) : null;
+    const { demoToolsEnabled } = await import("../services/guards.server");
     return {
       userId: context.userId,
       email: typeof email === "string" ? email : null,
       roles,
       agentName: agent?.name ?? null,
       agentRef: agent?.agent_ref ?? null,
+      demoToolsEnabled: demoToolsEnabled(),
     };
   });
 
@@ -81,6 +83,8 @@ export const claimDemoRoleFn = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .inputValidator((input: unknown) => claimSchema.parse(input))
   .handler(async ({ data, context }) => {
+    const { requireDemoMode } = await import("../services/guards.server");
+    requireDemoMode();
     const { grantRole } = await import("@/lib/db/users");
     const { db } = await import("@/lib/db/client");
     const email = context.claims["email"];

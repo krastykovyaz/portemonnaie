@@ -356,6 +356,13 @@ export function payoutReleaseVoucher(input: {
   reason: string;
   actorId?: string | null;
   actorLabel: string;
+  /**
+   * Must be true to release a payout that already has a tx hash. Releasing
+   * puts the voucher back to SOLD, so a second redemption creates a NEW
+   * idempotency key and a second real transfer — only safe once the caller
+   * has confirmed on chain that the first one actually failed.
+   */
+  chainFailureVerified?: boolean;
 }): { ok: boolean; error?: string; status?: string } {
   return tx(() => {
     const p = db
@@ -363,6 +370,9 @@ export function payoutReleaseVoucher(input: {
       .get(input.payoutId) as PayoutRow | null;
     if (!p) return { ok: false, error: "NOT_FOUND" };
     if (p.status === "CONFIRMED") return { ok: false, error: "ALREADY_CONFIRMED" };
+    if (p.tx_hash && !input.chainFailureVerified) {
+      return { ok: false, error: "TX_NOT_PROVEN_FAILED", status: p.status };
+    }
     const now = nowIso();
     db.query(
       `UPDATE payouts SET status = 'MANUAL_REVIEW', failure_reason = ?, updated_at = ? WHERE id = ?`,

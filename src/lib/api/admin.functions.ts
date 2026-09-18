@@ -138,8 +138,9 @@ export const listAuditFn = createServerFn({ method: "GET" })
 export const resetDemoDataFn = createServerFn({ method: "POST" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {
-    const { requireAdmin } = await import("../services/guards.server");
+    const { requireAdmin, requireDemoMode } = await import("../services/guards.server");
     const actor = await requireAdmin(context);
+    requireDemoMode();
     const { seedDemoData } = await import("@/lib/db/seed");
     await seedDemoData();
     const { writeAudit } = await import("../services/audit.server");
