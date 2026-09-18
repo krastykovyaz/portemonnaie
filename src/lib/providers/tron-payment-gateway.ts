@@ -1,4 +1,5 @@
 import type { ChainMode } from "../config/mode";
+import { fetchWithTimeout } from "../http/fetch-with-timeout";
 import type { DepositAddress, IncomingTransfer, PaymentGateway } from "./payment-gateway";
 
 const TRON_ADDRESS_RE = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
@@ -65,7 +66,7 @@ export class TronPaymentGateway implements PaymentGateway {
   private async request(path: string): Promise<TrongridTrc20Response> {
     const headers: Record<string, string> = { accept: "application/json" };
     if (this.config.apiKey) headers["TRON-PRO-API-KEY"] = this.config.apiKey;
-    const response = await fetch(`${this.config.apiBaseUrl}${path}`, { headers });
+    const response = await fetchWithTimeout(`${this.config.apiBaseUrl}${path}`, { headers });
     if (!response.ok) throw new Error(`TRON_API_${response.status}`);
     return (await response.json()) as TrongridTrc20Response;
   }
@@ -93,7 +94,7 @@ export class TronPaymentGateway implements PaymentGateway {
 
   async getConfirmations(txHash: string): Promise<number> {
     try {
-      const response = await fetch(`${this.config.apiBaseUrl}/wallet/gettransactioninfobyid`, {
+      const response = await fetchWithTimeout(`${this.config.apiBaseUrl}/wallet/gettransactioninfobyid`, {
         method: "POST",
         headers: {
           "content-type": "application/json",

@@ -13,9 +13,7 @@ import { screeningProvider } from "../providers/compliance";
 import { drivePayout } from "../payout/orchestrator";
 import { supabasePayoutStore } from "./payout-store.server";
 import { payoutLog } from "./payout.server";
-import { resolveEnergyManager } from "../energy/registry.server";
-import { economicsConfig } from "../energy/economics-config";
-import { planPayoutResources } from "../energy/rental/plan-resources.server";
+import { assessPayoutResources } from "../energy/pre-broadcast-guard.server";
 
 export type PreviewResult =
   | {
@@ -93,32 +91,23 @@ export async function redeemVoucher(input: {
   let resourceSource: string | null = null;
   let energyRentalId: string | null = null;
   if (!runtime.payoutProvider.simulated) {
-    const energyManager = resolveEnergyManager();
-    recipientKind = await energyManager.classifyRecipient(destination);
-    const resources = await energyManager.getAccountResources(
-      process.env["TREASURY_ADDRESS"] ?? "",
-    );
-    const estimate = energyManager.estimateCost(recipientKind, resources);
+    // Same guard the recovery sweep and admin retry run before they broadcast
+    // (see pre-broadcast-guard.server.ts). With ENERGY_PROVIDER=RENTED and a
+    // real shortfall it quotes, guard-checks the REAL price, and purchases a
+    // rental; otherwise it's the plain BURN/STAKED guard decision.
+    const assessment = await assessPayoutResources({
+      destination,
+      amount: Number(start.amount),
+      idempotencyKey: start.redemption_id,
+    });
 
-    const feeUsd = Math.round(Number(start.amount) * FEE_RATE * 100) / 100;
-    // When ENERGY_PROVIDER=RENTED and there's a real shortfall, this quotes a
-    // real rental, guard-checks the REAL price, and purchases/verifies it —
-    // otherwise (the default) it's byte-for-byte the pre-existing BURN/STAKED
-    // guard decision. See plan-resources.server.ts.
-    const plan = await planPayoutResources(
-      economicsConfig(),
-      estimate,
-      process.env["TREASURY_ADDRESS"] ?? "",
-      feeUsd,
-      start.redemption_id,
-    );
+    recipientKind = assessment.recipientKind;
+    estimatedEnergy = assessment.estimatedEnergy;
+    estimatedBandwidth = assessment.estimatedBandwidth;
+    resourceSource = assessment.resourceSource;
+    energyRentalId = assessment.ok ? assessment.rentalId : null;
 
-    estimatedEnergy = estimate.estimatedEnergy;
-    estimatedBandwidth = estimate.estimatedBandwidth;
-    resourceSource = plan.ok ? plan.estimate.resourceSource : estimate.resourceSource;
-    energyRentalId = plan.ok ? plan.rentalId : null;
-
-    if (!plan.ok) {
+    if (!assessment.ok) {
       const payoutId = createPayoutForRedemption({
         redemptionId: start.redemption_id,
         voucherId: start.voucher_id,
@@ -141,7 +130,7 @@ export async function redeemVoucher(input: {
       // path below, so it can't be redeemed twice while under review.
       payoutManualReview({
         payoutId,
-        reason: plan.reason,
+        reason: assessment.reason,
         actorId: input.userId ?? null,
         actorLabel: "cost-guard",
       });

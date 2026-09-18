@@ -8,10 +8,12 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
+    "start": "node .output/server/index.mjs",
     "lint": "eslint .",
     "format": "prettier --write .",
     "bot": "bun run bot/index.ts",
-    "test": "DATABASE_PATH=./data/test.db vitest run"
+    "test": "DATABASE_PATH=\"$(mktemp -d)/test.db\" vitest run",
+    "db:backup": "bun run scripts/backup-db.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

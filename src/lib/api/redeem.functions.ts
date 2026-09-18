@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { rateLimited } from "@/lib/security/rate-limit.server";
 
 const previewSchema = z.object({
   publicId: z.string().min(4).max(32),
@@ -16,6 +17,7 @@ const redeemSchema = previewSchema.extend({
  * against a stored hash inside the database.
  */
 export const previewVoucherFn = createServerFn({ method: "POST" })
+  .middleware([rateLimited("redeem-preview", { limit: 20, windowMs: 60_000 })])
   .inputValidator((input: unknown) => previewSchema.parse(input))
   .handler(async ({ data }) => {
     const { previewVoucher, explainError } = await import("../services/redemption.server");
@@ -43,6 +45,7 @@ export const validateAddressFn = createServerFn({ method: "POST" })
   });
 
 export const redeemVoucherFn = createServerFn({ method: "POST" })
+  .middleware([rateLimited("redeem", { limit: 10, windowMs: 60_000 })])
   .inputValidator((input: unknown) => redeemSchema.parse(input))
   .handler(async ({ data }) => {
     const { redeemVoucher } = await import("../services/redemption.server");

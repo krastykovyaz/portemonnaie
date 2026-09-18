@@ -6,6 +6,7 @@ import type {
   RentalRequest,
   RentalResult,
 } from "./types";
+import { fetchWithTimeout } from "@/lib/http/fetch-with-timeout";
 
 /**
  * Real adapter for Tronex Energy (https://tronxenergy.com), a TRON mainnet
@@ -77,7 +78,7 @@ export class TronexEnergyRentalProvider implements EnergyRentalProvider {
 
   async getQuote(request: RentalQuoteRequest): Promise<RentalQuote> {
     const volume = clampVolume(request.requiredEnergy);
-    const res = await fetch(`${this.opts.apiUrl}/api/v1/precountOrder`, {
+    const res = await fetchWithTimeout(`${this.opts.apiUrl}/api/v1/precountOrder`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({ days: request.duration, volume }),
@@ -98,7 +99,7 @@ export class TronexEnergyRentalProvider implements EnergyRentalProvider {
 
   async rentEnergy(request: RentalRequest): Promise<RentalResult> {
     const volume = clampVolume(request.energy);
-    const res = await fetch(`${this.opts.apiUrl}/api/v1/buyenergy`, {
+    const res = await fetchWithTimeout(`${this.opts.apiUrl}/api/v1/buyenergy`, {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({ days: request.duration, volume, target: request.targetAddress }),
@@ -126,7 +127,7 @@ export class TronexEnergyRentalProvider implements EnergyRentalProvider {
   }
 
   async getRentalStatus(rentalId: string): Promise<RentalResult | null> {
-    const res = await fetch(`${this.opts.apiUrl}/api/v1/status/${rentalId}`, {
+    const res = await fetchWithTimeout(`${this.opts.apiUrl}/api/v1/status/${rentalId}`, {
       headers: this.headers(),
     });
     if (res.status === 404) return null;

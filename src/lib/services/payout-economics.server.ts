@@ -1,4 +1,5 @@
 import { db } from "@/lib/db/client";
+import { fetchWithTimeout } from "@/lib/http/fetch-with-timeout";
 import { getLatestRental, getRentalStats } from "@/lib/db/procedures/energy-rentals";
 import { resolveRuntime } from "../providers/registry.server";
 import { resolveEnergyManager } from "../energy/registry.server";
@@ -122,7 +123,7 @@ export async function getTreasuryStatus(): Promise<TreasuryStatus> {
 
   let trxBalance: number | null = null;
   try {
-    const res = await fetch(`${apiUrl}/v1/accounts/${treasuryAddress}`);
+    const res = await fetchWithTimeout(`${apiUrl}/v1/accounts/${treasuryAddress}`);
     const json = (await res.json()) as { data?: Array<{ balance?: number }> };
     trxBalance = json.data?.[0]?.balance !== undefined ? json.data[0].balance / 1e6 : null;
   } catch {

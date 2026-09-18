@@ -4,6 +4,8 @@
  * receipt can't be read, callers get `null` and must leave the actual_*
  * columns null rather than backfill them with the pre-broadcast estimate.
  */
+import { fetchWithTimeout } from "@/lib/http/fetch-with-timeout";
+
 export type ActualResourceUsage = {
   energyUsed: number;
   bandwidthUsed: number;
@@ -18,7 +20,7 @@ export async function fetchActualResourceUsage(
   apiUrl: string,
 ): Promise<ActualResourceUsage | null> {
   try {
-    const res = await fetch(`${apiUrl}/wallet/gettransactioninfobyid`, {
+    const res = await fetchWithTimeout(`${apiUrl}/wallet/gettransactioninfobyid`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ value: txHash }),

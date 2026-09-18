@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { DENOMINATIONS } from "../domain/types";
+import { rateLimited } from "@/lib/security/rate-limit.server";
 
 const createOrderSchema = z.object({
   denomination: z.number().refine((v) => (DENOMINATIONS as readonly number[]).includes(v), {
@@ -32,6 +33,9 @@ export const getStorefrontFn = createServerFn({ method: "GET" }).handler(async (
 
 /** Public: create an order. Idempotent — the same key returns the same order. */
 export const createOrderFn = createServerFn({ method: "POST" })
+  // Each call reserves a voucher for the payment TTL — without a cap one
+  // client could lock the whole inventory.
+  .middleware([rateLimited("create-order", { limit: 5, windowMs: 60_000 })])
   .inputValidator((input: unknown) => createOrderSchema.parse(input))
   .handler(async ({ data }) => {
     const { createOrder } = await import("../services/order.server");
@@ -56,6 +60,7 @@ export const createOrderFn = createServerFn({ method: "POST" })
 
 /** Public: order status polling by public order id (no secrets exposed). */
 export const getOrderStatusFn = createServerFn({ method: "POST" })
+  .middleware([rateLimited("order-status", { limit: 60, windowMs: 60_000 })])
   .inputValidator((input: { publicOrderId: string }) => input)
   .handler(async ({ data }) => {
     const { getOrderByPublicId } = await import("../services/order.server");
@@ -92,6 +97,7 @@ export const getOrderStatusFn = createServerFn({ method: "POST" })
  * real transfer.
  */
 export const simulatePaymentFn = createServerFn({ method: "POST" })
+  .middleware([rateLimited("simulate-payment", { limit: 10, windowMs: 60_000 })])
   .inputValidator((input: { publicOrderId: string; amount?: number }) => input)
   .handler(async ({ data }) => {
     const { db } = await import("@/lib/db/client");

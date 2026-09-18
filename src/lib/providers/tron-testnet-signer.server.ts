@@ -1,6 +1,8 @@
 import { TronWeb } from "tronweb";
 import { db, nowIso } from "@/lib/db/client";
 import { REQUIRED_CONFIRMATIONS } from "../payout/state-machine";
+import { economicsConfig } from "../energy/economics-config";
+import { feeLimitSunFromGuard } from "../energy/fee-limit";
 import type { BlockchainProvider, ChainTransaction, ChainTxStatus, PayoutRequest } from "./blockchain";
 
 const TRON_ADDRESS_RE = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
@@ -165,7 +167,10 @@ export class TronTestnetPayoutSigner implements BlockchainProvider {
     let txHash: unknown;
     try {
       txHash = await contract["transfer"](destination, amountUnits).send({
-        feeLimit: 100_000_000,
+        // Bound by the same guard the pre-broadcast estimate was checked
+        // against, so the chain can never burn more than the configured
+        // MAX_NETWORK_COST_USD (was a flat 100 TRX regardless of the guard).
+        feeLimit: feeLimitSunFromGuard(economicsConfig()),
         shouldPollResponse: false,
         from: this.custodyAddress,
       });
