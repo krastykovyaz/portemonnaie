@@ -170,10 +170,21 @@ describe("payout orchestrator — real-signer-shaped failure modes", () => {
     const { store, get } = fakeStore(record);
     const outcome = await drivePayout(record, { provider, store, sleep: async () => {} });
 
-    expect(["FAILED", "MANUAL_REVIEW"]).toContain(outcome.status);
+    // A reverted broadcast goes straight to MANUAL_REVIEW: it can't be retried
+    // under the same idempotency key (the provider would return the reverted
+    // hash again), and leaving it FAILED made the recovery sweep re-claim it
+    // forever without ever escalating.
+    expect(outcome.status).toBe("MANUAL_REVIEW");
+    expect(outcome.failureReason).toBe("PROVIDER_REPORTED_FAILED");
     expect(outcome.txHash).toBe(broadcast.txHash);
-    expect(get().status).toBe(outcome.status);
+    expect(get().status).toBe("MANUAL_REVIEW");
     // Critically: a revert must never re-broadcast a second transfer.
+    expect(provider.createPayoutCalls).toBe(1);
+
+    // And the next sweep pass must not touch it again.
+    const reloaded = await store.load(get().id);
+    const again = await drivePayout(reloaded!, { provider, store, sleep: async () => {} });
+    expect(again.status).toBe("MANUAL_REVIEW");
     expect(provider.createPayoutCalls).toBe(1);
   });
 

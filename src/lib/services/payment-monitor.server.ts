@@ -116,8 +116,17 @@ export async function simulateCustomerPayment(input: {
   amount?: number;
   confirmations?: number;
 }) {
+  // Requires an explicit DEMO mode, not merely "the mock gateway happens to
+  // be active": in TESTNET a misconfigured payment detector falls back to the
+  // mock while the real payout signer stays live, which would turn this into
+  // a free-voucher -> real-USDT path.
+  const { demoToolsEnabled } = await import("./guards.server");
   const runtime = resolveRuntime();
-  if (!runtime.gateway.simulated || runtime.gateway.id !== "mock-payment-gateway") {
+  if (
+    !demoToolsEnabled() ||
+    !runtime.gateway.simulated ||
+    runtime.gateway.id !== "mock-payment-gateway"
+  ) {
     return { ok: false as const, error: "SIMULATION_DISABLED" };
   }
   const data = db

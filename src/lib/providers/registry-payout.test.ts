@@ -147,4 +147,16 @@ describe("resolveRuntime — payout provider activation", () => {
     expect(runtime.payoutProvider.id).not.toBe("mock-tron-testnet");
     expect(runtime.payoutBlockers.length).toBeGreaterThan(0);
   });
+
+  it("refuses a real payout signer while payment detection is misconfigured (gateway would be the mock)", () => {
+    // A fully valid signer config, but no TREASURY_ADDRESS for payment
+    // detection: the gateway degrades to the mock. Real transfers must not
+    // run beside simulated incoming payments — that would be a free-USDT path.
+    setEnv({ ...VALID_TESTNET_PAYOUT_ENV, TREASURY_ADDRESS: "" });
+    const runtime = resolveRuntime();
+    expect(runtime.gateway.id).toBe("mock-payment-gateway");
+    expect(runtime.payoutProvider.id).toBe("payout-signer-unavailable");
+    expect(runtime.payoutProvider.simulated).toBe(false);
+    expect(runtime.payoutBlockers.join(" ")).toMatch(/payment detection is not configured/);
+  });
 });
